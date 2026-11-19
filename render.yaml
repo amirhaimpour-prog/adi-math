@@ -1,0 +1,14 @@
+# One-click deploy on Render (https://render.com) — "New > Blueprint" and point it at this repo.
+services:
+  - type: web
+    name: adi-math
+    runtime: docker
+    plan: starter            # needed for the persistent disk (free plans lose data on restart)
+    healthCheckPath: /api/bootstrap
+    disk:
+      name: data
+      mountPath: /data       # SQLite database + uploaded images live here
+      sizeGB: 1
+    envVars:
+      - key: GEMINI_API_KEY  # optional – can also be set later from the admin settings screen
+        sync: false

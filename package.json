@@ -1,0 +1,35 @@
+{
+  "name": "adi-math-lms",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "עדי - בית למתמטיקה: פלטפורמת לומדה אינטראקטיבית",
+  "scripts": {
+    "dev": "node --watch server/index.js",
+    "dev:client": "vite",
+    "build": "vite build",
+    "start": "node server/index.js",
+    "test": "node --test test/"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "express": "^4.22.3",
+    "mammoth": "^1.13.0",
+    "multer": "^2.5.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.5",
+    "@vitejs/plugin-react": "^6.3.0",
+    "canvas-confetti": "^1.9.4",
+    "katex": "^0.19.1",
+    "lucide-react": "^1.76.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-router-dom": "^7.18.6",
+    "tailwindcss": "^4.3.5",
+    "vite": "^8.3.8"
+  }
+}

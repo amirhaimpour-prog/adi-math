@@ -365,11 +365,28 @@ export async function callGemini(parts, opts = {}) {
   if (!apiKey) throw new Error('לא הוגדר מפתח Gemini API. היכנסי להגדרות המערכת והדביקי מפתח.');
   const wanted = opts.model || getSetting('geminiModel');
   const { result } = await withModelFallback(apiKey, wanted, (m) =>
-    rawGemini(parts, { ...opts, apiKey, model: m.id, maxOutputTokens: Math.min(opts.maxOutputTokens || 60000, m.outputTokenLimit || 60000) }));
+    rawGemini(parts, {
+      ...opts, apiKey, model: m.id, thinkingLevel: opts.thinkingLevel || 'medium',
+      maxOutputTokens: Math.min(opts.maxOutputTokens || 60000, m.outputTokenLimit || 60000),
+    }));
   return result;
 }
 
-async function rawGemini(parts, { apiKey, model, maxOutputTokens = 60000, json = true, timeoutMs = 240_000, timeoutMessage } = {}) {
+async function rawGemini(parts, opts = {}) {
+  // Gemini 3+ "thinks" by default (slow even for trivial prompts); allow lowering it.
+  const wantsThinking = opts.thinkingLevel && /^gemini-([3-9]|\d{2})/.test(opts.model || '');
+  try {
+    return await rawGeminiOnce(parts, { ...opts, thinkingLevel: wantsThinking ? opts.thinkingLevel : undefined });
+  } catch (e) {
+    // Some models reject thinking settings — retry once without them.
+    if (wantsThinking && e.status === 400 && /think/i.test(e.googleMessage || '')) {
+      return rawGeminiOnce(parts, { ...opts, thinkingLevel: undefined });
+    }
+    throw e;
+  }
+}
+
+async function rawGeminiOnce(parts, { apiKey, model, maxOutputTokens = 60000, json = true, timeoutMs = 240_000, timeoutMessage, thinkingLevel } = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -383,6 +400,7 @@ async function rawGemini(parts, { apiKey, model, maxOutputTokens = 60000, json =
           temperature: 0.5,
           maxOutputTokens,
           ...(json ? { responseMimeType: 'application/json' } : {}),
+          ...(thinkingLevel ? { thinkingConfig: { thinkingLevel } } : {}),
         },
       }),
     });
@@ -434,8 +452,8 @@ export async function testGemini({ apiKey, model }) {
     const t0 = Date.now();
     try {
       await rawGemini([{ text: 'Reply with the single word: OK' }], {
-        apiKey, model: m.id, json: false, maxOutputTokens: 1024, timeoutMs: 15_000,
-        timeoutMessage: 'לא הגיב תוך 15 שניות',
+        apiKey, model: m.id, json: false, maxOutputTokens: 1024, timeoutMs: 25_000,
+        timeoutMessage: 'לא הגיב תוך 25 שניות', thinkingLevel: 'low',
       });
       return { model: m.id, ok: true, ms: Date.now() - t0 };
     } catch (e) {

@@ -765,8 +765,8 @@ admin.put('/settings', (req, res) => {
 
 admin.post('/settings/test-ai', ah(async (req, res) => {
   try {
-    const { reply, model, busy } = await testGemini({ apiKey: String(req.body.apiKey || '').trim() || undefined, model: clean(req.body.model, 80) || undefined });
-    res.json({ ok: true, reply, model, busy: !!busy });
+    const r = await testGemini({ apiKey: String(req.body.apiKey || '').trim() || undefined, model: clean(req.body.model, 80) || undefined });
+    res.json({ ok: true, ...r, busy: !!r.busy });
   } catch (e) { res.json({ ok: false, error: e.message }); }
 }));
 

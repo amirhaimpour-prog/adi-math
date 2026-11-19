@@ -326,7 +326,9 @@ async function candidateModels(apiKey, wanted) {
     throw new Error('למפתח הזה אין גישה לאף מודל Gemini. ודאי שהמפתח נוצר ב-Google AI Studio.');
   }
   const ranked = [...models].sort((a, b) => modelScore(b.id) - modelScore(a.id)).filter((m) => modelScore(m.id) >= 0);
-  const first = wanted && models.find((m) => m.id === wanted);
+  // With "automatic", start from the model that last answered successfully.
+  const preferred = wanted || getSetting('geminiLastGood');
+  const first = preferred && models.find((m) => m.id === preferred);
   const list = first ? [first, ...ranked.filter((m) => m.id !== first.id)] : ranked;
   return (list.length ? list : models).slice(0, 6);
 }
@@ -341,7 +343,9 @@ async function withModelFallback(apiKey, wanted, run, { rounds = 2, max = 6 } = 
   for (let round = 0; round < rounds; round++) {
     for (const m of candidates) {
       try {
-        return { result: await run(m), model: m.id };
+        const result = await run(m);
+        if (apiKey === getSetting('geminiApiKey')) setSetting('geminiLastGood', m.id);
+        return { result, model: m.id };
       } catch (e) {
         lastErr = e;
         if (!retryable.includes(e.status)) throw e;
@@ -385,7 +389,7 @@ async function rawGemini(parts, { apiKey, model, maxOutputTokens = 60000, json =
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) {
       const msg = data?.error?.message || `HTTP ${resp.status}`;
-      const fail = (text) => Object.assign(new Error(text), { status: resp.status });
+      const fail = (text) => Object.assign(new Error(text), { status: resp.status, googleMessage: msg });
       if (resp.status === 400 && /API key/i.test(msg)) throw fail('מפתח ה-Gemini אינו תקין. בדקי אותו בהגדרות.');
       if (resp.status === 403) throw fail(`למפתח ה-Gemini אין הרשאה למודל "${model}".`);
       if (resp.status === 404) throw fail(`המודל "${model}" אינו זמין למפתח הזה.`);
@@ -417,21 +421,37 @@ async function rawGemini(parts, { apiKey, model, maxOutputTokens = 60000, json =
 export async function testGemini({ apiKey, model }) {
   apiKey = apiKey || getSetting('geminiApiKey');
   if (!apiKey) throw new Error('לא הוגדר מפתח Gemini API.');
-  // Listing models already proves the key is valid; the ping only checks a model answers.
-  await listGeminiModels(apiKey);
-  try {
-    const { result, model: used } = await withModelFallback(apiKey, model, (m) =>
-      rawGemini([{ text: 'Reply with the single word: OK' }], {
-        apiKey, model: m.id, json: false, maxOutputTokens: 2048, timeoutMs: 20_000,
-        timeoutMessage: 'Google לא הגיב בזמן לבדיקת החיבור.',
-      }), { rounds: 1, max: 3 });
-    return { reply: String(result).trim().slice(0, 40), model: used };
-  } catch (e) {
-    if ([500, 502, 503, 504, 429].includes(e.status)) {
-      return { reply: '', model: '', busy: true };
+  // Listing models already proves the key is valid. Then ping a few models IN PARALLEL
+  // (the top candidates + the fastest "lite" one) and report each result, so the admin
+  // sees exactly what works and why something doesn't.
+  const models = await listGeminiModels(apiKey);
+  const top = (await candidateModels(apiKey, model)).slice(0, 3);
+  const lite = [...models].filter((m) => /flash-lite/.test(m.id) && modelScore(m.id) >= 0)
+    .sort((a, b) => modelScore(b.id) - modelScore(a.id))[0];
+  const probes = lite && !top.some((m) => m.id === lite.id) ? [...top, lite] : top;
+
+  const results = await Promise.all(probes.map(async (m) => {
+    const t0 = Date.now();
+    try {
+      await rawGemini([{ text: 'Reply with the single word: OK' }], {
+        apiKey, model: m.id, json: false, maxOutputTokens: 1024, timeoutMs: 15_000,
+        timeoutMessage: 'לא הגיב תוך 15 שניות',
+      });
+      return { model: m.id, ok: true, ms: Date.now() - t0 };
+    } catch (e) {
+      return { model: m.id, ok: false, ms: Date.now() - t0, status: e.status || 0, error: (e.googleMessage || e.message || '').slice(0, 220) };
     }
-    throw e;
-  }
+  }));
+
+  const working = probes.map((p) => results.find((r) => r.model === p.id)).find((r) => r.ok);
+  if (working && apiKey === getSetting('geminiApiKey')) setSetting('geminiLastGood', working.model);
+  return {
+    reply: working ? 'OK' : '',
+    model: working?.model || '',
+    busy: !working,
+    results,
+    totalModels: models.length,
+  };
 }
 
 function sourceToParts(sources) {

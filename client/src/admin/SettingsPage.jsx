@@ -96,9 +96,24 @@ export default function SettingsPage() {
           <Button variant="soft" icon={Wand2} loading={testing} disabled={!key && !s.geminiKeySet} onClick={test}>בדיקת חיבור</Button>
           {testResult && (testResult.ok
             ? (testResult.busy
-              ? <span className="text-amber-700 font-bold text-sm flex items-center gap-1"><CheckCircle2 size={17} /> המפתח מחובר ותקין ✓ – השרתים של Google עמוסים רגע, זה זמני.{key ? ' אפשר לשמור.' : ''}</span>
+              ? <span className="text-amber-700 font-bold text-sm flex items-center gap-1"><CheckCircle2 size={17} /> המפתח תקין, אבל אף מודל לא ענה – ראי פירוט למטה.</span>
               : <span className="text-emerald-700 font-bold text-sm flex items-center gap-1"><CheckCircle2 size={17} /> החיבור עובד! (מודל: <span dir="ltr">{testResult.model}</span>){key ? ' – עכשיו לחצי "שמירת הגדרות"' : ''}</span>)
             : <span className="text-rose-600 font-bold text-sm flex items-center gap-1"><XCircle size={17} /> {testResult.error}</span>)}
+          {testResult?.results?.length > 0 && (
+            <div className="w-full rounded-2xl border border-line bg-slate-50 p-3 text-sm">
+              <div className="text-xs font-black text-slate-500 mb-2">פירוט הבדיקה ({testResult.totalModels} מודלים זמינים למפתח; נבדקו {testResult.results.length} במקביל)</div>
+              <ul className="space-y-1.5">
+                {testResult.results.map((r) => (
+                  <li key={r.model} className="flex items-start gap-2">
+                    {r.ok ? <CheckCircle2 size={16} className="text-emerald-600 shrink-0 mt-0.5" /> : <XCircle size={16} className="text-rose-500 shrink-0 mt-0.5" />}
+                    <span className="font-bold shrink-0" dir="ltr">{r.model}</span>
+                    <span className="text-slate-500 shrink-0">{(r.ms / 1000).toFixed(1)} שנ׳</span>
+                    {!r.ok && <span className="text-rose-700 text-xs break-all" dir="ltr">{r.status ? `[${r.status}] ` : ''}{r.error}</span>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {s.geminiKeySet && <Button variant="ghost" size="sm" className="!text-rose-600" onClick={async () => { await api.put('/api/admin/settings', { clearGeminiKey: true, geminiApiKey: '' }); set({ geminiKeySet: false, geminiKeyHint: '' }); toast('המפתח נמחק', 'success'); }}>מחיקת המפתח</Button>}
         </div>
       </Card>

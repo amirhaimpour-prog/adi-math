@@ -95,7 +95,9 @@ export default function SettingsPage() {
         <div className="flex flex-wrap items-center gap-3">
           <Button variant="soft" icon={Wand2} loading={testing} disabled={!key && !s.geminiKeySet} onClick={test}>בדיקת חיבור</Button>
           {testResult && (testResult.ok
-            ? <span className="text-emerald-700 font-bold text-sm flex items-center gap-1"><CheckCircle2 size={17} /> החיבור עובד! (מודל: <span dir="ltr">{testResult.model}</span>){key ? ' – עכשיו לחצי "שמירת הגדרות"' : ''}</span>
+            ? (testResult.busy
+              ? <span className="text-amber-700 font-bold text-sm flex items-center gap-1"><CheckCircle2 size={17} /> המפתח מחובר ותקין ✓ – השרתים של Google עמוסים רגע, זה זמני.{key ? ' אפשר לשמור.' : ''}</span>
+              : <span className="text-emerald-700 font-bold text-sm flex items-center gap-1"><CheckCircle2 size={17} /> החיבור עובד! (מודל: <span dir="ltr">{testResult.model}</span>){key ? ' – עכשיו לחצי "שמירת הגדרות"' : ''}</span>)
             : <span className="text-rose-600 font-bold text-sm flex items-center gap-1"><XCircle size={17} /> {testResult.error}</span>)}
           {s.geminiKeySet && <Button variant="ghost" size="sm" className="!text-rose-600" onClick={async () => { await api.put('/api/admin/settings', { clearGeminiKey: true, geminiApiKey: '' }); set({ geminiKeySet: false, geminiKeyHint: '' }); toast('המפתח נמחק', 'success'); }}>מחיקת המפתח</Button>}
         </div>

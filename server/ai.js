@@ -332,13 +332,13 @@ async function candidateModels(apiKey, wanted) {
 }
 
 /** Runs a request, falling back to the next model on "quota exceeded" / "model unavailable". */
-async function withModelFallback(apiKey, wanted, run) {
-  const candidates = await candidateModels(apiKey, wanted);
+async function withModelFallback(apiKey, wanted, run, { rounds = 2, max = 6 } = {}) {
+  const candidates = (await candidateModels(apiKey, wanted)).slice(0, max);
   const retryable = [403, 404, 429, 500, 502, 503, 504];
   let lastErr;
   // Two rounds: overload (503 "high demand") is usually brief, so after trying every
   // candidate once we wait a little and go around again.
-  for (let round = 0; round < 2; round++) {
+  for (let round = 0; round < rounds; round++) {
     for (const m of candidates) {
       try {
         return { result: await run(m), model: m.id };
@@ -365,7 +365,7 @@ export async function callGemini(parts, opts = {}) {
   return result;
 }
 
-async function rawGemini(parts, { apiKey, model, maxOutputTokens = 60000, json = true, timeoutMs = 240_000 } = {}) {
+async function rawGemini(parts, { apiKey, model, maxOutputTokens = 60000, json = true, timeoutMs = 240_000, timeoutMessage } = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -406,7 +406,8 @@ async function rawGemini(parts, { apiKey, model, maxOutputTokens = 60000, json =
     }
     return json ? repairLatexEscapes(parseJsonLoose(text)) : text;
   } catch (e) {
-    if (e.name === 'AbortError') throw new Error('יצירת התוכן לקחה יותר מדי זמן. נסי שוב או בקשי פחות שאלות.');
+    // Status 504 lets the model fallback try the next model.
+    if (e.name === 'AbortError') throw Object.assign(new Error(timeoutMessage || 'יצירת התוכן לקחה יותר מדי זמן. נסי שוב או בקשי פחות שאלות.'), { status: 504 });
     throw e;
   } finally {
     clearTimeout(timer);
@@ -416,9 +417,21 @@ async function rawGemini(parts, { apiKey, model, maxOutputTokens = 60000, json =
 export async function testGemini({ apiKey, model }) {
   apiKey = apiKey || getSetting('geminiApiKey');
   if (!apiKey) throw new Error('לא הוגדר מפתח Gemini API.');
-  const { result, model: used } = await withModelFallback(apiKey, model, (m) =>
-    rawGemini([{ text: 'Reply with the single word: OK' }], { apiKey, model: m.id, json: false, maxOutputTokens: 2048, timeoutMs: 60_000 }));
-  return { reply: String(result).trim().slice(0, 40), model: used };
+  // Listing models already proves the key is valid; the ping only checks a model answers.
+  await listGeminiModels(apiKey);
+  try {
+    const { result, model: used } = await withModelFallback(apiKey, model, (m) =>
+      rawGemini([{ text: 'Reply with the single word: OK' }], {
+        apiKey, model: m.id, json: false, maxOutputTokens: 2048, timeoutMs: 20_000,
+        timeoutMessage: 'Google לא הגיב בזמן לבדיקת החיבור.',
+      }), { rounds: 1, max: 3 });
+    return { reply: String(result).trim().slice(0, 40), model: used };
+  } catch (e) {
+    if ([500, 502, 503, 504, 429].includes(e.status)) {
+      return { reply: '', model: '', busy: true };
+    }
+    throw e;
+  }
 }
 
 function sourceToParts(sources) {

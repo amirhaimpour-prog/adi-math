@@ -85,6 +85,14 @@ test('pickBestModel prefers the newest stable flash model', async () => {
   assert.equal(pickBestModel([]), null);
 });
 
+test('pickBestOpenAIModel prefers the newest full GPT model, skips pro/specialized', async () => {
+  const { pickBestOpenAIModel } = await import('../server/openai.js');
+  const m = (id) => ({ id, name: id });
+  assert.equal(pickBestOpenAIModel([m('gpt-4o'), m('gpt-5.2'), m('gpt-5.2-mini'), m('gpt-5.2-pro'), m('gpt-5.2-2026-01-15')]).id, 'gpt-5.2');
+  assert.equal(pickBestOpenAIModel([m('gpt-4o-mini'), m('gpt-4.1')]).id, 'gpt-4.1');
+  assert.equal(pickBestOpenAIModel([]), null);
+});
+
 test('repairLatexEscapes restores LaTeX broken by JSON escapes', () => {
   const broken = JSON.parse('{"a":"$\\frac{1}{2}$ and $3 \\times 4$ and $a \\neq b$"}');
   const fixed = repairLatexEscapes(broken);

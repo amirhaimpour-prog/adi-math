@@ -166,6 +166,9 @@ const DEFAULT_SETTINGS = {
   homeUrl: 'https://adi-math-home.netlify.app',
   geminiApiKey: '',
   geminiModel: '', // empty = pick the best available model automatically
+  aiProvider: 'gemini', // 'gemini' | 'openai' — the other one (if it has a key) is an automatic backup
+  openaiApiKey: '',
+  openaiModel: '',
   registrationOpen: 'true',
   showLeaderboard: 'true',
   dailyGoalXp: '60',
@@ -178,6 +181,7 @@ export function getSetting(key) {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
   if (row) return row.value;
   if (key === 'geminiApiKey' && process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY;
+  if (key === 'openaiApiKey' && process.env.OPENAI_API_KEY) return process.env.OPENAI_API_KEY;
   return DEFAULT_SETTINGS[key] ?? '';
 }
 export function setSetting(key, value) {

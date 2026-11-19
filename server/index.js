@@ -21,6 +21,7 @@ import {
 import {
   startGenerateJob, startExtendJob, getJob, listJobs, collectSources, testGemini, listGeminiModels, pickBestModel, MAX_UPLOAD_BYTES,
 } from './ai.js';
+import { testOpenAI, listOpenAIModels, pickBestOpenAIModel } from './openai.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLIENT_DIST = path.join(__dirname, '..', 'dist');
@@ -726,13 +727,17 @@ admin.post('/uploads', imageUpload.single('file'), (req, res) => {
 });
 
 // ---- settings
-const ADMIN_SETTING_KEYS = ['whatsappPhone', 'brandSubtitle', 'homeUrl', 'geminiApiKey', 'geminiModel', 'registrationOpen', 'showLeaderboard', 'dailyGoalXp', 'grades', 'levels', 'programs'];
+const ADMIN_SETTING_KEYS = ['whatsappPhone', 'brandSubtitle', 'homeUrl', 'geminiApiKey', 'geminiModel', 'openaiApiKey', 'openaiModel', 'aiProvider', 'registrationOpen', 'showLeaderboard', 'dailyGoalXp', 'grades', 'levels', 'programs'];
+const SECRET_KEYS = { geminiApiKey: 'clearGeminiKey', openaiApiKey: 'clearOpenaiKey' };
 admin.get('/settings', (req, res) => {
   const s = getAllSettings();
   const key = s.geminiApiKey || '';
+  const okey = s.openaiApiKey || '';
   res.json({
     settings: {
       ...s, geminiApiKey: '', geminiKeySet: !!key, geminiKeyHint: key ? `••••${key.slice(-4)}` : '',
+      openaiApiKey: '', openaiKeySet: !!okey, openaiKeyHint: okey ? `••••${okey.slice(-4)}` : '',
+      aiProvider: s.aiProvider === 'openai' ? 'openai' : 'gemini',
       grades: getJsonSetting('grades'), levels: getJsonSetting('levels'), programs: getJsonSetting('programs'),
       registrationOpen: s.registrationOpen === 'true', showLeaderboard: s.showLeaderboard === 'true',
     },
@@ -744,11 +749,12 @@ admin.put('/settings', (req, res) => {
   const b = req.body || {};
   for (const k of ADMIN_SETTING_KEYS) {
     if (b[k] === undefined) continue;
-    if (k === 'geminiApiKey') {
-      if (b.clearGeminiKey) setSetting(k, '');
+    if (SECRET_KEYS[k]) {
+      if (b[SECRET_KEYS[k]]) setSetting(k, '');
       else if (String(b[k]).trim()) setSetting(k, String(b[k]).trim());
       continue;
     }
+    if (k === 'aiProvider') { setSetting(k, b[k] === 'openai' ? 'openai' : 'gemini'); continue; }
     if (['grades', 'levels', 'programs'].includes(k)) {
       const list = (Array.isArray(b[k]) ? b[k] : []).map((x) => clean(x, 40)).filter(Boolean);
       if (list.length) setSetting(k, JSON.stringify([...new Set(list)]));
@@ -759,9 +765,23 @@ admin.put('/settings', (req, res) => {
     if (k === 'whatsappPhone') { setSetting(k, digits(b[k]).replace(/^0/, '972')); continue; }
     setSetting(k, clean(b[k], 300));
   }
-  if (b.clearGeminiKey) setSetting('geminiApiKey', '');
+  for (const [k, flag] of Object.entries(SECRET_KEYS)) if (b[flag]) setSetting(k, '');
   res.json({ ok: true });
 });
+
+admin.post('/settings/test-openai', ah(async (req, res) => {
+  try {
+    const r = await testOpenAI({ apiKey: String(req.body.apiKey || '').trim() || undefined, model: clean(req.body.model, 80) || undefined });
+    res.json({ ok: true, ...r, busy: !!r.busy });
+  } catch (e) { res.json({ ok: false, error: e.message }); }
+}));
+
+admin.post('/settings/openai-models', ah(async (req, res) => {
+  try {
+    const models = await listOpenAIModels(String(req.body.apiKey || '').trim() || undefined);
+    res.json({ ok: true, models, recommended: pickBestOpenAIModel(models)?.id || '' });
+  } catch (e) { res.json({ ok: false, error: e.message, models: [] }); }
+}));
 
 admin.post('/settings/test-ai', ah(async (req, res) => {
   try {

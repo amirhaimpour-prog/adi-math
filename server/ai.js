@@ -9,6 +9,7 @@ import net from 'node:net';
 import mammoth from 'mammoth';
 import { db, now, uid, getSetting, setSetting, saveTopic, getTopic } from './db.js';
 import { normalizeTopicContent } from './content.js';
+import { callOpenAI } from './openai.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
@@ -360,6 +361,45 @@ async function withModelFallback(apiKey, wanted, run, { rounds = 2, max = 6 } = 
   throw lastErr;
 }
 
+// ---------------------------------------------------------------- engine dispatch
+/** Which engines to use, in order: the chosen one first, the other as automatic backup. */
+export function providerOrder() {
+  const hasGemini = !!getSetting('geminiApiKey');
+  const hasOpenAI = !!getSetting('openaiApiKey');
+  const chosen = getSetting('aiProvider') === 'openai' ? 'openai' : 'gemini';
+  const order = chosen === 'openai' ? ['openai', 'gemini'] : ['gemini', 'openai'];
+  const available = order.filter((p) => (p === 'openai' ? hasOpenAI : hasGemini));
+  if (!available.length) throw new Error('לא הוגדר מפתח AI. היכנסי להגדרות והדביקי מפתח של GPT (OpenAI) או של Gemini.');
+  return available;
+}
+
+/** Generates structured JSON content with whichever engine works. */
+export async function generateStructured(promptText, sources = []) {
+  const order = providerOrder();
+  let lastErr;
+  const errors = [];
+  for (const p of order) {
+    try {
+      if (p === 'openai') {
+        const { text, truncated } = await callOpenAI(promptText, sources);
+        try { return repairLatexEscapes(parseJsonLoose(text)); } catch (e) {
+          if (truncated) throw new Error('התוכן שנוצר ארוך מדי. נסי לבקש פחות שאלות.');
+          throw e;
+        }
+      }
+      return await callGemini([{ text: promptText }, ...sourceToParts(sources)]);
+    } catch (e) {
+      lastErr = e;
+      errors.push(`${p === 'openai' ? 'GPT' : 'Gemini'}: ${e.message}`);
+      console.error(`[ai] ${p} failed:`, e.message);
+      // Content-size / format problems won't be fixed by switching engines.
+      if (/ארוך מדי|JSON תקין/.test(e.message)) throw e;
+    }
+  }
+  if (errors.length > 1) throw new Error(`אף מנוע AI לא הצליח כרגע. ${errors.join(' | ')}`);
+  throw lastErr;
+}
+
 export async function callGemini(parts, opts = {}) {
   const apiKey = opts.apiKey || getSetting('geminiApiKey');
   if (!apiKey) throw new Error('לא הוגדר מפתח Gemini API. היכנסי להגדרות המערכת והדביקי מפתח.');
@@ -518,8 +558,7 @@ export function startGenerateJob({ sources, opts }) {
         generated = mockGenerated(opts.title);
       } else {
         setJob(id, { stage: 'thinking' });
-        const parts = [{ text: buildPrompt(opts) }, ...sourceToParts(sources)];
-        generated = await callGemini(parts);
+        generated = await generateStructured(buildPrompt(opts), sources);
       }
       setJob(id, { stage: 'building' });
       const content = normalizeTopicContent(generated);
@@ -563,7 +602,7 @@ export function startExtendJob({ topicId, kind, count, instructions }) {
         const m = mockGenerated();
         generated = kind === 'exam' ? { exams: m.exams } : { practiceQuestions: m.practiceQuestions.slice(0, count) };
       } else {
-        generated = await callGemini([{ text: buildExtendPrompt(topic, { kind, count, instructions }) }]);
+        generated = await generateStructured(buildExtendPrompt(topic, { kind, count, instructions }), []);
       }
       setJob(id, { stage: 'building' });
       const fresh = getTopic(topicId); // re-read in case it was edited meanwhile

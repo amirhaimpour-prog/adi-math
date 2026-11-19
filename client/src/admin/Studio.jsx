@@ -70,7 +70,7 @@ export default function Studio() {
     }
   };
 
-  const keyMissing = cfg && !cfg.settings.geminiKeySet;
+  const keyMissing = cfg && !cfg.settings.geminiKeySet && !cfg.settings.openaiKeySet;
   const running = job?.status === 'running';
   const stageIdx = Math.max(0, STAGES.findIndex((s) => s.id === job?.stage));
 
@@ -81,7 +81,7 @@ export default function Studio() {
       {keyMissing && (
         <div className="mb-5 rounded-2xl bg-amber-50 border-2 border-amber-200 p-4 flex flex-wrap items-center gap-3">
           <AlertTriangle className="text-amber-600" />
-          <div className="flex-1 min-w-60"><b>צריך לחבר מפתח Gemini פעם אחת.</b> <span className="text-sm text-slate-600">זה לוקח דקה, בחינם, דרך Google AI Studio. ההסבר המלא נמצא בהגדרות.</span></div>
+          <div className="flex-1 min-w-60"><b>צריך לחבר מנוע AI פעם אחת.</b> <span className="text-sm text-slate-600">מדביקים מפתח של GPT (OpenAI) או של Gemini במסך ההגדרות – ההסבר המלא נמצא שם.</span></div>
           <Button icon={Settings} onClick={() => navigate('/admin/settings')}>להגדרות</Button>
         </div>
       )}

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import dns from 'node:dns/promises';
 import net from 'node:net';
 import mammoth from 'mammoth';
-import { db, now, uid, getSetting, saveTopic, getTopic } from './db.js';
+import { db, now, uid, getSetting, setSetting, saveTopic, getTopic } from './db.js';
 import { normalizeTopicContent } from './content.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -258,10 +258,84 @@ export function repairLatexEscapes(value) {
   return value;
 }
 
-export async function callGemini(parts, { apiKey, model, maxOutputTokens = 60000, json = true, timeoutMs = 240_000 } = {}) {
+// ---------------------------------------------------------------- model discovery
+// Google retires/limits model names over time, so we ask the API which models this key
+// can use instead of hard-coding one, and pick the best automatically.
+const modelCache = new Map(); // apiKey -> { at, models }
+
+export async function listGeminiModels(apiKey) {
   apiKey = apiKey || getSetting('geminiApiKey');
-  model = model || getSetting('geminiModel') || 'gemini-2.5-flash';
   if (!apiKey) throw new Error('לא הוגדר מפתח Gemini API. היכנסי להגדרות המערכת והדביקי מפתח.');
+  const cached = modelCache.get(apiKey);
+  if (cached && Date.now() - cached.at < 30 * 60_000) return cached.models;
+  const models = [];
+  let pageToken = '';
+  for (let i = 0; i < 10; i++) {
+    const resp = await fetch(`${GEMINI_BASE}/models?pageSize=200${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`, {
+      headers: { 'x-goog-api-key': apiKey },
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      const msg = data?.error?.message || `HTTP ${resp.status}`;
+      if (resp.status === 400 || resp.status === 401 || resp.status === 403) throw new Error(`מפתח ה-Gemini אינו תקין או חסר הרשאות (${msg})`);
+      throw new Error(`לא ניתן לקבל את רשימת המודלים: ${msg}`);
+    }
+    for (const m of data.models || []) {
+      const id = String(m.name || '').replace(/^models\//, '');
+      if (!/^gemini-/.test(id)) continue;
+      if (!(m.supportedGenerationMethods || []).includes('generateContent')) continue;
+      if (/(tts|image|audio|live|embedding|robotics|computer-use|exp-|learnlm|nano)/i.test(id)) continue;
+      models.push({ id, name: m.displayName || id, outputTokenLimit: m.outputTokenLimit || 8192 });
+    }
+    pageToken = data.nextPageToken;
+    if (!pageToken) break;
+  }
+  modelCache.set(apiKey, { at: Date.now(), models });
+  return models;
+}
+
+function modelScore(id) {
+  const m = id.match(/^gemini-(\d+(?:\.\d+)?)-(flash-lite|flash|pro)(.*)$/);
+  if (!m) return -1;
+  const version = Number(m[1]);
+  const tier = { flash: 3, pro: 2, 'flash-lite': 1 }[m[2]];
+  const rest = m[3] || '';
+  const preview = /preview|exp/.test(rest) ? 4 : 0; // previews get renamed/shut down — prefer stable unless much newer
+  const dated = /-\d{2,}/.test(rest) ? 0.2 : 0; // prefer the stable alias over dated snapshots
+  return version * 10 + tier - preview - dated;
+}
+
+export function pickBestModel(models) {
+  const sorted = [...models].sort((a, b) => modelScore(b.id) - modelScore(a.id));
+  return sorted.find((m) => modelScore(m.id) >= 0) || sorted[0] || null;
+}
+
+export async function resolveModel(apiKey, wanted) {
+  const models = await listGeminiModels(apiKey);
+  if (!models.length) throw new Error('למפתח הזה אין גישה לאף מודל Gemini. ודאי שהמפתח נוצר ב-Google AI Studio.');
+  const exact = wanted && models.find((m) => m.id === wanted);
+  return exact || pickBestModel(models);
+}
+
+export async function callGemini(parts, opts = {}) {
+  const apiKey = opts.apiKey || getSetting('geminiApiKey');
+  if (!apiKey) throw new Error('לא הוגדר מפתח Gemini API. היכנסי להגדרות המערכת והדביקי מפתח.');
+  const wanted = opts.model || getSetting('geminiModel');
+  let model = wanted;
+  let outLimit = 60000;
+  try {
+    const resolved = await resolveModel(apiKey, wanted);
+    model = resolved.id;
+    outLimit = resolved.outputTokenLimit || outLimit;
+    // Remember the working model so the settings screen shows what is actually used.
+    if (!opts.apiKey && model !== wanted) setSetting('geminiModel', model);
+  } catch (e) {
+    if (!model) throw e; // can't list and nothing configured
+  }
+  return rawGemini(parts, { ...opts, apiKey, model, maxOutputTokens: Math.min(opts.maxOutputTokens || 60000, outLimit) });
+}
+
+async function rawGemini(parts, { apiKey, model, maxOutputTokens = 60000, json = true, timeoutMs = 240_000 } = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -283,7 +357,7 @@ export async function callGemini(parts, { apiKey, model, maxOutputTokens = 60000
       const msg = data?.error?.message || `HTTP ${resp.status}`;
       if (resp.status === 400 && /API key/i.test(msg)) throw new Error('מפתח ה-Gemini אינו תקין. בדקי אותו בהגדרות.');
       if (resp.status === 403) throw new Error('למפתח ה-Gemini אין הרשאה למודל הזה. בדקי את המפתח בהגדרות.');
-      if (resp.status === 404) throw new Error(`המודל "${model}" לא נמצא. בחרי מודל אחר בהגדרות.`);
+      if (resp.status === 404) throw new Error(`המודל "${model}" אינו זמין למפתח הזה. בהגדרות לחצי "בדיקת חיבור" – המערכת תבחר מודל זמין אוטומטית.`);
       if (resp.status === 429) throw new Error('חרגת ממכסת השימוש של Gemini. נסי שוב בעוד כמה דקות.');
       throw new Error(`שגיאה משירות ה-AI: ${msg}`);
     }
@@ -309,8 +383,10 @@ export async function callGemini(parts, { apiKey, model, maxOutputTokens = 60000
 }
 
 export async function testGemini({ apiKey, model }) {
-  const text = await callGemini([{ text: 'Reply with the single word: OK' }], { apiKey, model, json: false, maxOutputTokens: 200, timeoutMs: 30_000 });
-  return String(text).trim().slice(0, 40);
+  apiKey = apiKey || getSetting('geminiApiKey');
+  const resolved = await resolveModel(apiKey, model);
+  const text = await rawGemini([{ text: 'Reply with the single word: OK' }], { apiKey, model: resolved.id, json: false, maxOutputTokens: 2048, timeoutMs: 60_000 });
+  return { reply: String(text).trim().slice(0, 40), model: resolved.id };
 }
 
 function sourceToParts(sources) {

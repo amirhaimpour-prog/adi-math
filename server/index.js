@@ -19,7 +19,7 @@ import {
   addXp, levelInfo, BADGES, getUserBadges, checkPracticeBadges, checkExamBadges, todayXp, dailyGoal, liveStreak,
 } from './game.js';
 import {
-  startGenerateJob, startExtendJob, getJob, listJobs, collectSources, testGemini, MAX_UPLOAD_BYTES,
+  startGenerateJob, startExtendJob, getJob, listJobs, collectSources, testGemini, listGeminiModels, pickBestModel, MAX_UPLOAD_BYTES,
 } from './ai.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -765,9 +765,17 @@ admin.put('/settings', (req, res) => {
 
 admin.post('/settings/test-ai', ah(async (req, res) => {
   try {
-    const reply = await testGemini({ apiKey: String(req.body.apiKey || '').trim() || undefined, model: clean(req.body.model, 80) || undefined });
-    res.json({ ok: true, reply });
+    const { reply, model } = await testGemini({ apiKey: String(req.body.apiKey || '').trim() || undefined, model: clean(req.body.model, 80) || undefined });
+    res.json({ ok: true, reply, model });
   } catch (e) { res.json({ ok: false, error: e.message }); }
+}));
+
+admin.post('/settings/ai-models', ah(async (req, res) => {
+  try {
+    const models = await listGeminiModels(String(req.body.apiKey || '').trim() || undefined);
+    const best = pickBestModel(models);
+    res.json({ ok: true, models, recommended: best?.id || '' });
+  } catch (e) { res.json({ ok: false, error: e.message, models: [] }); }
 }));
 
 admin.put('/account', (req, res) => {

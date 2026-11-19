@@ -76,6 +76,15 @@ test('public questions hide answers and shuffle deterministically', () => {
   assert.equal(p1.answer, undefined);
 });
 
+test('pickBestModel prefers the newest stable flash model', async () => {
+  const { pickBestModel } = await import('../server/ai.js');
+  const m = (id) => ({ id, name: id });
+  assert.equal(pickBestModel([m('gemini-2.5-pro'), m('gemini-3.8-flash'), m('gemini-3.5-flash-lite'), m('gemini-3.9-flash-preview-11-2026')]).id, 'gemini-3.8-flash');
+  assert.equal(pickBestModel([m('gemini-2.5-flash'), m('gemini-3.1-pro-preview')]).id, 'gemini-3.1-pro-preview');
+  assert.equal(pickBestModel([m('gemini-flash-latest')]).id, 'gemini-flash-latest');
+  assert.equal(pickBestModel([]), null);
+});
+
 test('repairLatexEscapes restores LaTeX broken by JSON escapes', () => {
   const broken = JSON.parse('{"a":"$\\frac{1}{2}$ and $3 \\times 4$ and $a \\neq b$"}');
   const fixed = repairLatexEscapes(broken);

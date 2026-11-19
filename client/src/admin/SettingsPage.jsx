@@ -7,15 +7,12 @@ import { PasswordInput } from '../pages/AuthPage.jsx';
 import { PageHeader } from './AdminApp.jsx';
 import { StringList } from './EditorParts.jsx';
 
-const MODELS = [
-  ['gemini-2.5-flash', 'Gemini 2.5 Flash – מהיר וחסכוני (מומלץ)'],
-  ['gemini-2.5-pro', 'Gemini 2.5 Pro – איכותי יותר, איטי יותר'],
-];
-
 export default function SettingsPage() {
   const { reload } = useApp();
   const { toast } = useUi();
   const [s, setS] = useState(null);
+  const [models, setModels] = useState(null);
+  const [recommended, setRecommended] = useState('');
   const [key, setKey] = useState('');
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
@@ -45,7 +42,14 @@ export default function SettingsPage() {
     setTesting(true);
     setTestResult(null);
     try {
-      const r = await api.post('/api/admin/settings/test-ai', { apiKey: key, model: s.geminiModel });
+      const list = await api.post('/api/admin/settings/ai-models', { apiKey: key });
+      if (!list.ok) { setTestResult({ ok: false, error: list.error }); return; }
+      setModels(list.models);
+      setRecommended(list.recommended);
+      // A saved model that this key can't use falls back to automatic.
+      const model = list.models.some((m) => m.id === s.geminiModel) ? s.geminiModel : '';
+      if (model !== s.geminiModel) set({ geminiModel: model });
+      const r = await api.post('/api/admin/settings/test-ai', { apiKey: key, model });
       setTestResult(r);
     } catch (e) { setTestResult({ ok: false, error: e.message }); } finally { setTesting(false); }
   };
@@ -78,22 +82,20 @@ export default function SettingsPage() {
         </div>
         <div className="grid sm:grid-cols-2 gap-3">
           <Field label="מפתח Gemini API" hint={s.geminiKeySet ? `מפתח שמור: ${s.geminiKeyHint} – הזיני חדש רק כדי להחליף` : 'עדיין לא הוגדר מפתח'}>
-            <PasswordInput value={key} onChange={setKey} placeholder={s.geminiKeySet ? 'השאירי ריק כדי לא לשנות' : 'AIza...'} autoComplete="off" />
+            <PasswordInput value={key} onChange={setKey} placeholder={s.geminiKeySet ? 'השאירי ריק כדי לא לשנות' : 'הדביקי כאן את המפתח'} autoComplete="off" />
           </Field>
-          <Field label="מודל">
-            <select className="field" value={s.geminiModel} onChange={(e) => set({ geminiModel: e.target.value })}>
-              {MODELS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-              {!MODELS.some(([v]) => v === s.geminiModel) && <option value={s.geminiModel}>{s.geminiModel}</option>}
+          <Field label="מודל" hint={models ? `${models.length} מודלים זמינים למפתח שלך` : 'לחצי "בדיקת חיבור" כדי לטעון את המודלים הזמינים'}>
+            <select className="field" dir="ltr" value={s.geminiModel || ''} onChange={(e) => set({ geminiModel: e.target.value })}>
+              <option value="">אוטומטי – המודל הכי טוב שזמין (מומלץ)</option>
+              {(models || []).map((m) => <option key={m.id} value={m.id}>{m.name}{m.id === recommended ? ' ⭐' : ''}</option>)}
+              {s.geminiModel && !(models || []).some((m) => m.id === s.geminiModel) && <option value={s.geminiModel}>{s.geminiModel}</option>}
             </select>
           </Field>
         </div>
-        <Field label="או שם מודל אחר (מתקדם)" hint="אם Google משחררת מודל חדש – אפשר לכתוב את השם שלו כאן">
-          <input className="field" dir="ltr" value={s.geminiModel} onChange={(e) => set({ geminiModel: e.target.value.trim() })} />
-        </Field>
         <div className="flex flex-wrap items-center gap-3">
           <Button variant="soft" icon={Wand2} loading={testing} disabled={!key && !s.geminiKeySet} onClick={test}>בדיקת חיבור</Button>
           {testResult && (testResult.ok
-            ? <span className="text-emerald-700 font-bold text-sm flex items-center gap-1"><CheckCircle2 size={17} /> החיבור עובד!</span>
+            ? <span className="text-emerald-700 font-bold text-sm flex items-center gap-1"><CheckCircle2 size={17} /> החיבור עובד! (מודל: <span dir="ltr">{testResult.model}</span>){key ? ' – עכשיו לחצי "שמירת הגדרות"' : ''}</span>
             : <span className="text-rose-600 font-bold text-sm flex items-center gap-1"><XCircle size={17} /> {testResult.error}</span>)}
           {s.geminiKeySet && <Button variant="ghost" size="sm" className="!text-rose-600" onClick={async () => { await api.put('/api/admin/settings', { clearGeminiKey: true, geminiApiKey: '' }); set({ geminiKeySet: false, geminiKeyHint: '' }); toast('המפתח נמחק', 'success'); }}>מחיקת המפתח</Button>}
         </div>

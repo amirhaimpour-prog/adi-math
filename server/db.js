@@ -165,7 +165,7 @@ const DEFAULT_SETTINGS = {
   brandSubtitle: 'כפר סבא',
   homeUrl: 'https://adi-math-home.netlify.app',
   geminiApiKey: '',
-  geminiModel: 'gemini-2.5-flash',
+  geminiModel: '', // empty = pick the best available model automatically
   registrationOpen: 'true',
   showLeaderboard: 'true',
   dailyGoalXp: '60',

@@ -317,22 +317,42 @@ export async function resolveModel(apiKey, wanted) {
   return exact || pickBestModel(models);
 }
 
+/** Models to try, best first: the chosen one (if available), then the ranked rest. */
+async function candidateModels(apiKey, wanted) {
+  let models = [];
+  try { models = await listGeminiModels(apiKey); } catch (e) { if (!wanted) throw e; }
+  if (!models.length) {
+    if (wanted) return [{ id: wanted, outputTokenLimit: 60000 }];
+    throw new Error('למפתח הזה אין גישה לאף מודל Gemini. ודאי שהמפתח נוצר ב-Google AI Studio.');
+  }
+  const ranked = [...models].sort((a, b) => modelScore(b.id) - modelScore(a.id)).filter((m) => modelScore(m.id) >= 0);
+  const first = wanted && models.find((m) => m.id === wanted);
+  const list = first ? [first, ...ranked.filter((m) => m.id !== first.id)] : ranked;
+  return (list.length ? list : models).slice(0, 5);
+}
+
+/** Runs a request, falling back to the next model on "quota exceeded" / "model unavailable". */
+async function withModelFallback(apiKey, wanted, run) {
+  const candidates = await candidateModels(apiKey, wanted);
+  let lastErr;
+  for (const m of candidates) {
+    try {
+      return { result: await run(m), model: m.id };
+    } catch (e) {
+      lastErr = e;
+      if (![404, 429, 403].includes(e.status)) throw e;
+    }
+  }
+  throw lastErr;
+}
+
 export async function callGemini(parts, opts = {}) {
   const apiKey = opts.apiKey || getSetting('geminiApiKey');
   if (!apiKey) throw new Error('לא הוגדר מפתח Gemini API. היכנסי להגדרות המערכת והדביקי מפתח.');
   const wanted = opts.model || getSetting('geminiModel');
-  let model = wanted;
-  let outLimit = 60000;
-  try {
-    const resolved = await resolveModel(apiKey, wanted);
-    model = resolved.id;
-    outLimit = resolved.outputTokenLimit || outLimit;
-    // Remember the working model so the settings screen shows what is actually used.
-    if (!opts.apiKey && model !== wanted) setSetting('geminiModel', model);
-  } catch (e) {
-    if (!model) throw e; // can't list and nothing configured
-  }
-  return rawGemini(parts, { ...opts, apiKey, model, maxOutputTokens: Math.min(opts.maxOutputTokens || 60000, outLimit) });
+  const { result } = await withModelFallback(apiKey, wanted, (m) =>
+    rawGemini(parts, { ...opts, apiKey, model: m.id, maxOutputTokens: Math.min(opts.maxOutputTokens || 60000, m.outputTokenLimit || 60000) }));
+  return result;
 }
 
 async function rawGemini(parts, { apiKey, model, maxOutputTokens = 60000, json = true, timeoutMs = 240_000 } = {}) {
@@ -355,11 +375,12 @@ async function rawGemini(parts, { apiKey, model, maxOutputTokens = 60000, json =
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) {
       const msg = data?.error?.message || `HTTP ${resp.status}`;
-      if (resp.status === 400 && /API key/i.test(msg)) throw new Error('מפתח ה-Gemini אינו תקין. בדקי אותו בהגדרות.');
-      if (resp.status === 403) throw new Error('למפתח ה-Gemini אין הרשאה למודל הזה. בדקי את המפתח בהגדרות.');
-      if (resp.status === 404) throw new Error(`המודל "${model}" אינו זמין למפתח הזה. בהגדרות לחצי "בדיקת חיבור" – המערכת תבחר מודל זמין אוטומטית.`);
-      if (resp.status === 429) throw new Error('חרגת ממכסת השימוש של Gemini. נסי שוב בעוד כמה דקות.');
-      throw new Error(`שגיאה משירות ה-AI: ${msg}`);
+      const fail = (text) => Object.assign(new Error(text), { status: resp.status });
+      if (resp.status === 400 && /API key/i.test(msg)) throw fail('מפתח ה-Gemini אינו תקין. בדקי אותו בהגדרות.');
+      if (resp.status === 403) throw fail(`למפתח ה-Gemini אין הרשאה למודל "${model}".`);
+      if (resp.status === 404) throw fail(`המודל "${model}" אינו זמין למפתח הזה.`);
+      if (resp.status === 429) throw fail(`חרגת ממכסת השימוש של Gemini (מודל "${model}"). נסי שוב בעוד כמה דקות, או בחרי "אוטומטי" בהגדרות.`);
+      throw fail(`שגיאה משירות ה-AI: ${msg}`);
     }
     const cand = data?.candidates?.[0];
     const text = (cand?.content?.parts || []).map((p) => p.text || '').join('');
@@ -384,9 +405,10 @@ async function rawGemini(parts, { apiKey, model, maxOutputTokens = 60000, json =
 
 export async function testGemini({ apiKey, model }) {
   apiKey = apiKey || getSetting('geminiApiKey');
-  const resolved = await resolveModel(apiKey, model);
-  const text = await rawGemini([{ text: 'Reply with the single word: OK' }], { apiKey, model: resolved.id, json: false, maxOutputTokens: 2048, timeoutMs: 60_000 });
-  return { reply: String(text).trim().slice(0, 40), model: resolved.id };
+  if (!apiKey) throw new Error('לא הוגדר מפתח Gemini API.');
+  const { result, model: used } = await withModelFallback(apiKey, model, (m) =>
+    rawGemini([{ text: 'Reply with the single word: OK' }], { apiKey, model: m.id, json: false, maxOutputTokens: 2048, timeoutMs: 60_000 }));
+  return { reply: String(result).trim().slice(0, 40), model: used };
 }
 
 function sourceToParts(sources) {

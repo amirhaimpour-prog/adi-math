@@ -328,20 +328,30 @@ async function candidateModels(apiKey, wanted) {
   const ranked = [...models].sort((a, b) => modelScore(b.id) - modelScore(a.id)).filter((m) => modelScore(m.id) >= 0);
   const first = wanted && models.find((m) => m.id === wanted);
   const list = first ? [first, ...ranked.filter((m) => m.id !== first.id)] : ranked;
-  return (list.length ? list : models).slice(0, 5);
+  return (list.length ? list : models).slice(0, 6);
 }
 
 /** Runs a request, falling back to the next model on "quota exceeded" / "model unavailable". */
 async function withModelFallback(apiKey, wanted, run) {
   const candidates = await candidateModels(apiKey, wanted);
+  const retryable = [403, 404, 429, 500, 502, 503, 504];
   let lastErr;
-  for (const m of candidates) {
-    try {
-      return { result: await run(m), model: m.id };
-    } catch (e) {
-      lastErr = e;
-      if (![404, 429, 403].includes(e.status)) throw e;
+  // Two rounds: overload (503 "high demand") is usually brief, so after trying every
+  // candidate once we wait a little and go around again.
+  for (let round = 0; round < 2; round++) {
+    for (const m of candidates) {
+      try {
+        return { result: await run(m), model: m.id };
+      } catch (e) {
+        lastErr = e;
+        if (!retryable.includes(e.status)) throw e;
+      }
     }
+    if (![500, 502, 503, 504].includes(lastErr?.status)) break;
+    await new Promise((r) => setTimeout(r, 4000));
+  }
+  if ([500, 502, 503, 504].includes(lastErr?.status)) {
+    throw Object.assign(new Error('השרתים של Google עמוסים כרגע (עומס זמני). נסי שוב בעוד כמה דקות.'), { status: lastErr.status });
   }
   throw lastErr;
 }
